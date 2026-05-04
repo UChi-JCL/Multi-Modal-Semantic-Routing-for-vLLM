@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nemo-training-data
+  labels:
+    app: nemo-training
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: ocs-external-storagecluster-ceph-rbd
+  resources:
+    requests:
+      storage: 120Gi
+  # Namespace quota as of PR authoring: 200Gi storage / 4 PVCs. Current
+  # usage 68Gi / 3 PVCs, so 120Gi fits with ~12Gi headroom. Size covers
+  # ~100k synthetic audio samples + external accented audio + several
+  # NeMo checkpoints + logs; excludes an on-disk feature cache.
+  # The Ceph-RBD class allows online expansion (allowVolumeExpansion:
+  # true), so resizing later is a one-line `oc patch` away.
