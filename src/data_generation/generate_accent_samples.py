@@ -15,12 +15,12 @@ Voices and their native languages:
   - ryan, aiden: English (native — control group)
 """
 
-import os
+import argparse
 import json
 import time
-import httpx
-import argparse
 from pathlib import Path
+
+import httpx
 
 # 10 diverse English sentences covering different phonetic patterns
 SENTENCES = [
@@ -38,15 +38,15 @@ SENTENCES = [
 
 # Voice → accent label mapping
 VOICE_ACCENTS = {
-    "vivian":   "mandarin",
-    "serena":   "mandarin",
+    "vivian": "mandarin",
+    "serena": "mandarin",
     "uncle_fu": "mandarin",
-    "dylan":    "mandarin_beijing",
-    "eric":     "mandarin_sichuan",
+    "dylan": "mandarin_beijing",
+    "eric": "mandarin_sichuan",
     "ono_anna": "japanese",
-    "sohee":    "korean",
-    "ryan":     "native_english",
-    "aiden":    "native_english",
+    "sohee": "korean",
+    "ryan": "native_english",
+    "aiden": "native_english",
 }
 
 
@@ -63,22 +63,25 @@ def generate_speech(api_base: str, text: str, voice: str, output_path: str) -> f
             },
         )
         resp.raise_for_status()
-    
+
     with open(output_path, "wb") as f:
         f.write(resp.content)
-    
+
     elapsed = time.time() - t0
     return elapsed
 
 
 def main():
     parser = argparse.ArgumentParser(description="Generate accented English speech samples")
-    parser.add_argument("--api-base", default="https://qwen3-tts-multi-modal-semantic-routing-for-vllm-d266df.apps.shift.nerc.mghpcc.org",
-                        help="vLLM-Omni API base URL")
-    parser.add_argument("--output-dir", default="data/synthetic/pilot",
-                        help="Output directory for generated samples")
-    parser.add_argument("--voices", nargs="+", default=list(VOICE_ACCENTS.keys()),
-                        help="Voices to generate (default: all)")
+    parser.add_argument(
+        "--api-base",
+        default="https://qwen3-tts-multi-modal-semantic-routing-for-vllm-d266df.apps.shift.nerc.mghpcc.org",
+        help="vLLM-Omni API base URL",
+    )
+    parser.add_argument("--output-dir", default="data/synthetic/pilot", help="Output directory for generated samples")
+    parser.add_argument(
+        "--voices", nargs="+", default=list(VOICE_ACCENTS.keys()), help="Voices to generate (default: all)"
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -105,25 +108,29 @@ def main():
                 size_kb = output_path.stat().st_size / 1024
                 print(f"OK ({elapsed:.1f}s, {size_kb:.0f}KB)")
 
-                manifest.append({
-                    "voice": voice,
-                    "accent": accent,
-                    "sentence_id": i,
-                    "text": text,
-                    "file": str(output_path.relative_to(output_dir)),
-                    "generation_time_s": round(elapsed, 2),
-                    "file_size_kb": round(size_kb, 1),
-                })
+                manifest.append(
+                    {
+                        "voice": voice,
+                        "accent": accent,
+                        "sentence_id": i,
+                        "text": text,
+                        "file": str(output_path.relative_to(output_dir)),
+                        "generation_time_s": round(elapsed, 2),
+                        "file_size_kb": round(size_kb, 1),
+                    }
+                )
             except Exception as e:
                 print(f"FAILED: {e}")
-                manifest.append({
-                    "voice": voice,
-                    "accent": accent,
-                    "sentence_id": i,
-                    "text": text,
-                    "file": None,
-                    "error": str(e),
-                })
+                manifest.append(
+                    {
+                        "voice": voice,
+                        "accent": accent,
+                        "sentence_id": i,
+                        "text": text,
+                        "file": None,
+                        "error": str(e),
+                    }
+                )
 
     # Save manifest
     manifest_path = output_dir / "manifest.json"

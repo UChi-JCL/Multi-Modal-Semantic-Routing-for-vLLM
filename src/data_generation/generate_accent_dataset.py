@@ -9,13 +9,13 @@ Models:
   + Native English controls from both models
 """
 
-import os
+import argparse
 import json
 import time
-import httpx
-import argparse
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
+import httpx
 
 # Customer service scenario sentences
 SENTENCES = {
@@ -71,28 +71,27 @@ SENTENCES = {
 
 # Model → voice → accent mapping
 QWEN3_VOICES = {
-    "vivian":   {"accent": "mandarin", "native_lang": "Chinese (Mandarin)"},
-    "serena":   {"accent": "mandarin", "native_lang": "Chinese (Mandarin)"},
+    "vivian": {"accent": "mandarin", "native_lang": "Chinese (Mandarin)"},
+    "serena": {"accent": "mandarin", "native_lang": "Chinese (Mandarin)"},
     "uncle_fu": {"accent": "mandarin", "native_lang": "Chinese (Mandarin)"},
-    "dylan":    {"accent": "mandarin", "native_lang": "Chinese (Beijing)"},
+    "dylan": {"accent": "mandarin", "native_lang": "Chinese (Beijing)"},
     "ono_anna": {"accent": "japanese", "native_lang": "Japanese"},
-    "aiden":    {"accent": "native_english", "native_lang": "English"},
+    "aiden": {"accent": "native_english", "native_lang": "English"},
 }
 
 VOXTRAL_VOICES = {
     "hi_female": {"accent": "hindi", "native_lang": "Hindi"},
-    "hi_male":   {"accent": "hindi", "native_lang": "Hindi"},
+    "hi_male": {"accent": "hindi", "native_lang": "Hindi"},
     "es_female": {"accent": "spanish", "native_lang": "Spanish"},
-    "es_male":   {"accent": "spanish", "native_lang": "Spanish"},
+    "es_male": {"accent": "spanish", "native_lang": "Spanish"},
     "it_female": {"accent": "italian", "native_lang": "Italian"},
-    "it_male":   {"accent": "italian", "native_lang": "Italian"},
-    "neutral_male":  {"accent": "native_english", "native_lang": "English"},
+    "it_male": {"accent": "italian", "native_lang": "Italian"},
+    "neutral_male": {"accent": "native_english", "native_lang": "English"},
     "casual_female": {"accent": "native_english", "native_lang": "English"},
 }
 
 
-def generate_speech(api_base: str, text: str, voice: str, output_path: str,
-                    instructions: str = None) -> float:
+def generate_speech(api_base: str, text: str, voice: str, output_path: str, instructions: str = None) -> float:
     """Generate speech and save to file. Returns generation time in seconds."""
     t0 = time.time()
     payload = {
@@ -113,8 +112,9 @@ def generate_speech(api_base: str, text: str, voice: str, output_path: str,
     return time.time() - t0
 
 
-def run_generation(api_base: str, voices: dict, model_name: str,
-                   run_id: str, output_base: Path, instructions: str = None):
+def run_generation(
+    api_base: str, voices: dict, model_name: str, run_id: str, output_base: Path, instructions: str = None
+):
     """Generate all sentences for all voices using a given model."""
     manifest = []
     all_sentences = []
@@ -135,38 +135,41 @@ def run_generation(api_base: str, voices: dict, model_name: str,
             filename = f"{scenario}_{sent_idx:02d}.wav"
             output_path = voice_dir / filename
 
-            print(f"[{count}/{total}] {voice} ({accent}) — {scenario}_{sent_idx:02d}...",
-                  end=" ", flush=True)
+            print(f"[{count}/{total}] {voice} ({accent}) — {scenario}_{sent_idx:02d}...", end=" ", flush=True)
             try:
                 elapsed = generate_speech(api_base, text, voice, str(output_path), instructions)
                 size_kb = output_path.stat().st_size / 1024
                 print(f"OK ({elapsed:.1f}s, {size_kb:.0f}KB)")
 
-                manifest.append({
-                    "voice": voice,
-                    "accent": accent,
-                    "native_lang": info["native_lang"],
-                    "model": model_name,
-                    "scenario": scenario,
-                    "sentence_id": sent_idx,
-                    "text": text,
-                    "file": str(output_path.relative_to(output_base)),
-                    "instructions": instructions,
-                    "generation_time_s": round(elapsed, 2),
-                    "file_size_kb": round(size_kb, 1),
-                })
+                manifest.append(
+                    {
+                        "voice": voice,
+                        "accent": accent,
+                        "native_lang": info["native_lang"],
+                        "model": model_name,
+                        "scenario": scenario,
+                        "sentence_id": sent_idx,
+                        "text": text,
+                        "file": str(output_path.relative_to(output_base)),
+                        "instructions": instructions,
+                        "generation_time_s": round(elapsed, 2),
+                        "file_size_kb": round(size_kb, 1),
+                    }
+                )
             except Exception as e:
                 print(f"FAILED: {e}")
-                manifest.append({
-                    "voice": voice,
-                    "accent": accent,
-                    "model": model_name,
-                    "scenario": scenario,
-                    "sentence_id": sent_idx,
-                    "text": text,
-                    "file": None,
-                    "error": str(e),
-                })
+                manifest.append(
+                    {
+                        "voice": voice,
+                        "accent": accent,
+                        "model": model_name,
+                        "scenario": scenario,
+                        "sentence_id": sent_idx,
+                        "text": text,
+                        "file": None,
+                        "error": str(e),
+                    }
+                )
 
     return manifest
 
@@ -176,17 +179,16 @@ def main():
     parser.add_argument("--qwen-api", default="http://localhost:8091")
     parser.add_argument("--voxtral-api", default="http://localhost:8092")
     parser.add_argument("--output-dir", default="data/synthetic")
-    parser.add_argument("--instructions", default=None,
-                        help="Optional instruction for Qwen3 voices (e.g. calm tone)")
+    parser.add_argument("--instructions", default=None, help="Optional instruction for Qwen3 voices (e.g. calm tone)")
     args = parser.parse_args()
 
     timestamp = datetime.utcnow().strftime("%Y%m%d")
-    
+
     # Find next run number
     output_base = Path(args.output_dir)
     output_base.mkdir(parents=True, exist_ok=True)
     existing = [d.name for d in output_base.iterdir() if d.is_dir()]
-    
+
     # Qwen3 run
     qwen_num = len([e for e in existing if e.startswith("qwen3tts_")]) + 1
     qwen_run_id = f"qwen3tts_{timestamp}_{qwen_num:03d}"
@@ -198,26 +200,29 @@ def main():
     print(f"{'='*60}\n")
 
     qwen_manifest = run_generation(
-        args.qwen_api, QWEN3_VOICES, "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
-        qwen_run_id, qwen_dir, args.instructions
+        args.qwen_api, QWEN3_VOICES, "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", qwen_run_id, qwen_dir, args.instructions
     )
 
     # Save Qwen3 run config + manifest
     with open(qwen_dir / "run_config.json", "w") as f:
-        json.dump({
-            "run_id": qwen_run_id,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "model": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
-            "serving": "vLLM-Omni v0.18.0",
-            "hardware": "NVIDIA H100 80GB HBM3",
-            "voices": QWEN3_VOICES,
-            "instructions": args.instructions,
-            "scenarios": list(SENTENCES.keys()),
-            "sentences_per_scenario": 10,
-            "total_sentences": 40,
-            "total_samples": len(qwen_manifest),
-            "successful": sum(1 for m in qwen_manifest if m.get("file")),
-        }, f, indent=2)
+        json.dump(
+            {
+                "run_id": qwen_run_id,
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "model": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+                "serving": "vLLM-Omni v0.18.0",
+                "hardware": "NVIDIA H100 80GB HBM3",
+                "voices": QWEN3_VOICES,
+                "instructions": args.instructions,
+                "scenarios": list(SENTENCES.keys()),
+                "sentences_per_scenario": 10,
+                "total_sentences": 40,
+                "total_samples": len(qwen_manifest),
+                "successful": sum(1 for m in qwen_manifest if m.get("file")),
+            },
+            f,
+            indent=2,
+        )
 
     with open(qwen_dir / "manifest.json", "w") as f:
         json.dump(qwen_manifest, f, indent=2)
@@ -233,25 +238,28 @@ def main():
     print(f"{'='*60}\n")
 
     voxtral_manifest = run_generation(
-        args.voxtral_api, VOXTRAL_VOICES, "mistralai/Voxtral-4B-TTS-2603",
-        voxtral_run_id, voxtral_dir
+        args.voxtral_api, VOXTRAL_VOICES, "mistralai/Voxtral-4B-TTS-2603", voxtral_run_id, voxtral_dir
     )
 
     # Save Voxtral run config + manifest
     with open(voxtral_dir / "run_config.json", "w") as f:
-        json.dump({
-            "run_id": voxtral_run_id,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "model": "mistralai/Voxtral-4B-TTS-2603",
-            "serving": "vLLM-Omni v0.18.0",
-            "hardware": "NVIDIA H100 80GB HBM3",
-            "voices": VOXTRAL_VOICES,
-            "scenarios": list(SENTENCES.keys()),
-            "sentences_per_scenario": 10,
-            "total_sentences": 40,
-            "total_samples": len(voxtral_manifest),
-            "successful": sum(1 for m in voxtral_manifest if m.get("file")),
-        }, f, indent=2)
+        json.dump(
+            {
+                "run_id": voxtral_run_id,
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "model": "mistralai/Voxtral-4B-TTS-2603",
+                "serving": "vLLM-Omni v0.18.0",
+                "hardware": "NVIDIA H100 80GB HBM3",
+                "voices": VOXTRAL_VOICES,
+                "scenarios": list(SENTENCES.keys()),
+                "sentences_per_scenario": 10,
+                "total_sentences": 40,
+                "total_samples": len(voxtral_manifest),
+                "successful": sum(1 for m in voxtral_manifest if m.get("file")),
+            },
+            f,
+            indent=2,
+        )
 
     with open(voxtral_dir / "manifest.json", "w") as f:
         json.dump(voxtral_manifest, f, indent=2)
@@ -260,7 +268,7 @@ def main():
     qwen_ok = sum(1 for m in qwen_manifest if m.get("file"))
     voxtral_ok = sum(1 for m in voxtral_manifest if m.get("file"))
     print(f"\n{'='*60}")
-    print(f"SUMMARY")
+    print("SUMMARY")
     print(f"{'='*60}")
     print(f"Qwen3:   {qwen_ok}/{len(qwen_manifest)} samples → {qwen_run_id}/")
     print(f"Voxtral: {voxtral_ok}/{len(voxtral_manifest)} samples → {voxtral_run_id}/")

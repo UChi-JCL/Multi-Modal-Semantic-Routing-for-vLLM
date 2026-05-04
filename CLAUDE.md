@@ -22,6 +22,23 @@ oc whoami 2>/dev/null || echo "Need to login"  # Cluster access
 oc get pods -l app=qwen3-tts           # Model serving status
 ```
 
+## Development Environment
+
+One-time setup:
+
+```bash
+uv sync                         # creates .venv from pyproject.toml + uv.lock
+uv run pre-commit install       # registers git hook; runs ruff + yamllint on commit
+```
+
+Ad-hoc lint:
+
+```bash
+uv run pre-commit run --all-files
+```
+
+Lint stack: ruff (E/F/I rules, format) for Python, yamllint (relaxed) for k8s manifests, plus trailing-whitespace / EOF / merge-conflict / large-file (<500kb) guards. Config in `pyproject.toml`, `.pre-commit-config.yaml`, `.yamllint.yaml`.
+
 ## Cluster & GPU Operations
 
 Infrastructure is NERC MGHPCC OpenShift with H100 GPUs at ~$3/hr. **Always scale down after use.**

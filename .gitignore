@@ -182,9 +182,9 @@ cython_debug/
 .abstra/
 
 # Visual Studio Code
-#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
+#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore
 #  that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#  and can be added to the global gitignore or merged into this file. However, if you prefer, 
+#  and can be added to the global gitignore or merged into this file. However, if you prefer,
 #  you could uncomment the following to ignore the entire vscode folder
 # .vscode/
 
@@ -220,5 +220,5 @@ data/synthetic/voxtral_20260330_001/**/*.wav
 !data/synthetic/**/annotations.json
 
 # Keep small test/tuning samples as experiment evidence
-# (tuning_test, tuning_test_v2, fish_clone_test, fish_speech_test, 
+# (tuning_test, tuning_test_v2, fish_clone_test, fish_speech_test,
 #  qwen3_clone_test, crosslingual_test are small enough to commit)
