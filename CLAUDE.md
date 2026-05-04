@@ -43,6 +43,52 @@ Lint stack: ruff (E/F/I rules, format) for Python, yamllint (relaxed) for k8s ma
 
 Infrastructure is NERC MGHPCC OpenShift with H100 GPUs at ~$3/hr. **Always scale down after use.**
 
+### NGC Registry Access
+
+Riva and NeMo containers live on NVIDIA's private registry `nvcr.io`. One-time setup per cluster namespace so any pod can pull `nvcr.io/nvidia/...` without per-manifest `imagePullSecrets`. The NGC CLI is **not required** for this workflow — the web UI issues the key, and `docker` / `oc` do the rest. Install the CLI only if you also want to pull NGC-hosted models (`.nemo` / `.riva` files) directly to your laptop; see https://org.ngc.nvidia.com/setup/installers/cli.
+
+1. Sign up at https://ngc.nvidia.com (free; use UChicago email).
+2. Generate a Personal API Key. NGC reorganized its UI in early 2026; the **Setup** page was retired in favor of Account Settings:
+
+   - Profile avatar (top-right) → **Account Settings** → **API Keys**. (If the banner still shows the legacy **Setup → Generate API Key** path, that also works.)
+   - Click **+ Generate Personal Key**. Name it (e.g., `openshift-nerc-pull`), pick an expiration, and select services **NGC Catalog** + **NGC Private Registry**.
+   - **Copy the key immediately — it is shown only once.** Up to 8 personal keys per user total.
+
+3. Optional local Docker smoke test:
+
+   ```bash
+   docker login nvcr.io
+   # Username: $oauthtoken    (literal string, including the dollar sign)
+   # Password: <paste the API key>
+   ```
+
+4. Create the OpenShift pull secret in the project namespace:
+
+   ```bash
+   oc create secret docker-registry ngc-secret \
+     --docker-server=nvcr.io \
+     --docker-username='$oauthtoken' \
+     --docker-password='<NGC_API_KEY>' \
+     --docker-email=t-9bwen@uchicago.edu
+   ```
+
+5. Link the secret to the default ServiceAccount so no manifest needs `imagePullSecrets`:
+
+   ```bash
+   oc secrets link default ngc-secret --for=pull
+   ```
+
+6. Verify:
+
+   ```bash
+   oc get secret ngc-secret -o jsonpath='{.type}{"\n"}'    # kubernetes.io/dockerconfigjson
+   oc describe sa default | grep -i ngc                     # "Image pull secrets: ngc-secret"
+   ```
+
+After verification passes, nvcr.io-hosted deployments (Riva, NeMo) can be applied without changes.
+
+### Cluster operations
+
 ```bash
 # Login (token expires periodically)
 oc login --token=<token> --server=https://k8s.nerc.mghpcc.org:6443
