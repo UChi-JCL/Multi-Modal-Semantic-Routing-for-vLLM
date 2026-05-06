@@ -31,7 +31,8 @@ spec:
             --api-key $(VLLM_API_KEY) \
             --host 0.0.0.0 --port 8000 --served-model-name qwen3-tts \
             --trust-remote-code --enforce-eager \
-            --max-num-seqs 64 --max-num-batched-tokens 16384
+            --max-num-seqs 64 --max-num-batched-tokens 16384 \
+            --gpu-memory-utilization 0.9
         ports:
         - containerPort: 8000
           name: http
