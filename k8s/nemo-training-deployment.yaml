@@ -20,8 +20,13 @@ spec:
       app: nemo-training
   template:
     metadata:
+      # Pod-level labels must duplicate the Deployment's standard labels
+      # (Deployment.metadata.labels do not propagate to Pods). Selectors
+      # and observability tooling match on Pod labels.
       labels:
         app: nemo-training
+        app.kubernetes.io/part-of: accent-stt
+        app.kubernetes.io/component: training
     spec:
       # H100 taint, matching every existing deployment in this repo.
       tolerations:
