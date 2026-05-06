@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nemo-training-data
+  labels:
+    app: nemo-training
+    app.kubernetes.io/part-of: accent-stt
+    app.kubernetes.io/component: training-data
+  annotations:
+    purpose: nemo-lora-finetuning
+spec:
+  accessModes:
+  # RWO fits the planned workflow (one interactive training pod at a time,
+  # scaled up via `oc rsh`, scaled down when done). If side-pods are
+  # needed later (tensorboard, jupyter, data inspection against the same
+  # volume), migration requires a RWX-capable class — Ceph-RBD does NOT
+  # support RWX, so the switch would move to CephFS (e.g.
+  # `ocs-external-storagecluster-cephfs`). That is not a live migration.
+  - ReadWriteOnce
+  volumeMode: Filesystem
+  # Cluster-specific: NERC MGHPCC OpenShift. Verify before applying on
+  # other clusters — a mismatched storageClassName leaves the PVC in
+  # `Pending`. Confirm against the existing vllm-model-cache with:
+  #   oc get pvc vllm-model-cache -o jsonpath='{.spec.storageClassName}'
+  storageClassName: ocs-external-storagecluster-ceph-rbd
+  resources:
+    requests:
+      # Namespace quota as of PR authoring: 200Gi storage / 4 PVCs.
+      # Current usage 68Gi / 3 PVCs, so 120Gi fits with ~12Gi headroom.
+      # Size covers ~100k synthetic audio samples + external accented
+      # audio + several NeMo checkpoints + logs; excludes an on-disk
+      # feature cache. Rotate old LoRA checkpoints aggressively — a
+      # single fine-tune run can produce several GB of artifacts.
+      #
+      # Online expansion is possible if `allowVolumeExpansion: true` is
+      # set on the StorageClass. Verify with:
+      #   oc get sc ocs-external-storagecluster-ceph-rbd \
+      #     -o jsonpath='{.allowVolumeExpansion}'
+      # If true, resize via `oc patch pvc nemo-training-data -p ...`;
+      # if false, a cluster-admin must flip the SC flag first.
+      storage: 120Gi
