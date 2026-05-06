@@ -43,6 +43,54 @@ Lint stack: ruff (E/F/I rules, format) for Python, yamllint (relaxed) for k8s ma
 
 Infrastructure is NERC MGHPCC OpenShift with H100 GPUs at ~$3/hr. **Always scale down after use.**
 
+### NGC Registry Access
+
+Riva and NeMo containers live on NVIDIA's private registry `nvcr.io`. One-time setup per cluster namespace so pods running under the `default` ServiceAccount can pull `nvcr.io/nvidia/...` without per-manifest `imagePullSecrets`. The NGC CLI is **not required** for this workflow — the web UI issues the key, and `docker` / `oc` do the rest. Install the CLI only if you also want to pull NGC-hosted models (`.nemo` / `.riva` files) directly to your laptop; see https://org.ngc.nvidia.com/setup/installers/cli.
+
+1. Sign up at https://ngc.nvidia.com (free; use UChicago email).
+2. Generate a Personal API Key. Path: profile avatar (top-right) → **Setup** → **Generate API Key** → **Setup / API Keys** → **+ Generate Personal Key** (the exact label varies as NVIDIA revises the dashboard).
+
+   - Name it (e.g., `openshift-nerc-pull`), pick an expiration, and select the **NGC Catalog** service. `NGC Private Registry` is only needed if you also push to a user-owned private registry; for pulling NVIDIA-hosted `nvcr.io` images, **NGC Catalog alone is sufficient**.
+   - **Copy the key immediately — it is shown only once.** Up to 8 personal keys per user total.
+
+3. Optional local Docker smoke test:
+
+   ```bash
+   docker login nvcr.io
+   # Username: $oauthtoken    (literal string, including the dollar sign)
+   # Password: <paste the API key>
+   ```
+
+4. Create the OpenShift pull secret in the project namespace:
+
+   ```bash
+   oc create secret docker-registry ngc-secret \
+     --docker-server=nvcr.io \
+     --docker-username='$oauthtoken' \
+     --docker-password='<NGC_API_KEY>'
+   ```
+
+5. Link the secret to the `default` ServiceAccount:
+
+   ```bash
+   oc secrets link default ngc-secret --for=pull
+   ```
+
+   **Scope caveat:** this link only covers pods that run under the `default` SA. If a Deployment sets `serviceAccountName: <other-sa>`, either link that SA explicitly (`oc secrets link <other-sa> ngc-secret --for=pull`) or add `imagePullSecrets: [{name: ngc-secret}]` to its pod spec. Linking to `default` also means **every** pod in the namespace can pull from `nvcr.io` using this key — acceptable here because the namespace is single-tenant; in a shared namespace prefer per-Deployment `imagePullSecrets`.
+
+6. Verify:
+
+   ```bash
+   oc get secret ngc-secret -o jsonpath='{.type}{"\n"}'    # kubernetes.io/dockerconfigjson
+   oc describe sa default | grep 'ngc-secret'              # appears under "Image pull secrets"
+   ```
+
+After verification passes, nvcr.io-hosted deployments (Riva, NeMo) that use the `default` SA can be applied without changes.
+
+**Key rotation:** to rotate, delete and recreate the secret with a fresh NGC API key. Running pods keep their cached image; only new pulls are affected.
+
+### Cluster operations
+
 ```bash
 # Login (token expires periodically)
 oc login --token=<token> --server=https://k8s.nerc.mghpcc.org:6443
