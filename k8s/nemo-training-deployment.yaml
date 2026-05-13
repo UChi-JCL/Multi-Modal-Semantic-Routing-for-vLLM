@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nemo-training
+  labels:
+    app: nemo-training
+    app.kubernetes.io/part-of: accent-stt
+    app.kubernetes.io/component: training
+  annotations:
+    purpose: nemo-lora-finetuning-and-nemo2riva-conversion
+spec:
+  # Scale-to-zero is deliberate: fine-tuning is a batch workload that
+  # only runs during an active session. User scales up manually, shells
+  # in via `oc rsh deployment/nemo-training`, runs training or the
+  # nemo2riva conversion, then scales back to 0. H100 is ~$3/hr — do
+  # not leave this running.
+  replicas: 0
+  selector:
+    matchLabels:
+      app: nemo-training
+  template:
+    metadata:
+      # Pod-level labels must duplicate the Deployment's standard labels
+      # (Deployment.metadata.labels do not propagate to Pods). Selectors
+      # and observability tooling match on Pod labels.
+      labels:
+        app: nemo-training
+        app.kubernetes.io/part-of: accent-stt
+        app.kubernetes.io/component: training
+    spec:
+      # H100 taint, matching every existing deployment in this repo.
+      tolerations:
+      - key: nvidia.com/gpu.product
+        operator: Equal
+        value: NVIDIA-H100-80GB-HBM3
+        effect: NoSchedule
+      containers:
+      - name: nemo
+        # NVIDIA NeMo Framework container. Verify the latest tag before
+        # applying:
+        #   skopeo list-tags docker://nvcr.io/nvidia/nemo
+        # Bump to the newest stable monthly release if available.
+        # Requires the namespace `ngc-secret` pull secret linked to the
+        # default SA — see CLAUDE.md § NGC Registry Access.
+        image: nvcr.io/nvidia/nemo:25.04
+        command: ["/bin/sh", "-c"]
+        # sleep infinity keeps the pod alive so the user can `oc rsh`
+        # in, install nemo2riva, run LoRA training, or stage `.riva`
+        # model files for the riva-stt deployment to consume.
+        args: ["sleep infinity"]
+        env:
+        - name: HOME
+          value: /tmp
+        # Shared HF cache with the serving PVC so we don't re-download
+        # base checkpoints already pulled for other deployments.
+        - name: HF_HOME
+          value: /models/hf_home
+        - name: TRANSFORMERS_CACHE
+          value: /models/hf_home
+        - name: NEMO_CACHE_DIR
+          value: /models/nemo_cache
+        - name: NUMBA_CACHE_DIR
+          value: /tmp/numba_cache
+        - name: MPLCONFIGDIR
+          value: /tmp/matplotlib
+        resources:
+          # Training is memory-heavier than serving: DataLoader workers,
+          # dataset shards in RAM, checkpoint staging. Serving pods in
+          # this repo use 16-32Gi; this pod doubles it.
+          requests:
+            cpu: "4"
+            memory: 32Gi
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "16"
+            memory: 64Gi
+            nvidia.com/gpu: "1"
+        volumeMounts:
+        # Shared model cache: lets this pod drop the `.riva` output file
+        # where the riva-stt deployment will find it (/models/riva/*).
+        - name: model-cache
+          mountPath: /models
+        # Training-only PVC: dataset shards, LoRA checkpoints, logs.
+        - name: training-data
+          mountPath: /data
+        # /dev/shm for DataLoader workers — PyTorch spawns workers that
+        # share tensors via shared memory; the default 64MB is too small.
+        - name: shm
+          mountPath: /dev/shm
+      volumes:
+      - name: model-cache
+        persistentVolumeClaim:
+          claimName: vllm-model-cache
+      - name: training-data
+        persistentVolumeClaim:
+          claimName: nemo-training-data
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 8Gi
+# No Service, no Route: this deployment is accessed interactively
+# through `oc rsh` only. No network endpoint is exposed.
