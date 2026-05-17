@@ -222,3 +222,10 @@ data/synthetic/voxtral_20260330_001/**/*.wav
 # Keep small test/tuning samples as experiment evidence
 # (tuning_test, tuning_test_v2, fish_clone_test, fish_speech_test,
 #  qwen3_clone_test, crosslingual_test are small enough to commit)
+
+# Generated NeMo training manifests (derived from data/synthetic/*)
+data/manifests/
+# Resampled audio (derived from data/synthetic/*; regenerate via src/training/convert_manifest.py)
+data/synthetic_16k/
+# Training experiment outputs (on cluster; should not be committed)
+data/experiments/
