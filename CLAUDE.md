@@ -161,7 +161,7 @@ httpx.post("http://localhost:8094/v1/audio/speech", json={
 
 ## Training
 
-Full workflow: [docs/training-runbook.md](docs/training-runbook.md) — covers pod boot, data upload, manifest conversion (`src/training/convert_manifest.py`), LoRA and full-parameter recipes, monitoring, checkpoint resume, and the `nemo2riva` handoff.
+Full workflow: [docs/training-runbook.md](docs/training-runbook.md) — covers pod boot, data upload, manifest conversion (`src/training/convert_manifest.py`), full-parameter and LoRA recipes, monitoring, checkpoint resume, and the `nemo2riva` handoff.
 
 Quick summary: scale up `nemo-training`, run `uv run python src/training/convert_manifest.py` locally to produce NeMo-format JSONLs + resampled audio, `oc rsync` to the pod, shell in, launch training, tail logs, scale down.
 

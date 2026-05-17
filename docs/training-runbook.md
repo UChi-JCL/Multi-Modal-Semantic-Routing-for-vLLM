@@ -2,7 +2,7 @@
 
 > **Status: v0 — UNVALIDATED.** Commands here have not been run end-to-end on NERC with NeMo 25.04 × Nemotron-Streaming yet. On first discrepancy, file a PR fix and update the `## Known unknowns` section at the bottom. This document is intended to be the authoritative training guide once validated; until then, treat it as a concrete starting point rather than a guarantee.
 
-End-to-end guide for fine-tuning accent-adaptive ASR models on the synthetic accented-English corpus this repo generates. Covers LoRA (primary recommendation) and full-parameter fine-tuning (alternative), plus the `nemo2riva` handoff to the production STT serving path.
+End-to-end guide for fine-tuning accent-adaptive ASR models on the synthetic accented-English corpus this repo generates. Covers full-parameter fine-tuning (primary recipe) and a brief LoRA alternative, plus the `nemo2riva` handoff to the production STT serving path.
 
 ## Prerequisites
 
@@ -72,7 +72,7 @@ data/
 ┌─────────────────────────┐
 │ /data on nemo-training  │  resampled audio + NeMo manifests
 └────────────┬────────────┘
-             │  train_asr_adapter.py (LoRA)  or  speech_to_text_rnnt_bpe.py (full-param)
+             │  speech_to_text_rnnt_bpe.py (full-param)  or  train_asr_adapter.py (LoRA)
              ▼
 ┌─────────────────────────┐
 │ /data/experiments/<id>/ │  checkpoints (.nemo, .ckpt)
@@ -84,9 +84,9 @@ data/
 └─────────────────────────┘
 ```
 
-## Step-by-step LoRA recipe (primary)
+## Step-by-step full-parameter fine-tuning (primary)
 
-LoRA fine-tuning adds a small ~1-5M-parameter adapter on top of Nemotron-Streaming's ~600M frozen weights. Best for the current ~400-sample corpus: low catastrophic-forgetting risk, fast iteration, per-accent adapters align with the project's Phase-2/3 routing vision.
+Full-parameter fine-tuning updates all of Nemotron-Streaming's ~600M weights. Use it as the default recipe for this project: it gives the encoder room to adapt to the acoustic distribution shift our accented synthetic corpus represents, and it's the path most likely to produce a single high-quality checkpoint we can hand off to Riva. Catastrophic-forgetting risk is mitigated by warmup + low LR (see flag notes below).
 
 ### 1. Start the pod
 
@@ -109,7 +109,8 @@ exit
 
 ### 3. Introspect the model (confirms decoder type)
 
-Still from your laptop:
+The decoder class determines which training script to invoke in step 6.
+
 ```bash
 oc exec deployment/nemo-training -- python -c "
 from nemo.collections.asr.models import ASRModel
@@ -168,24 +169,30 @@ Alternative: pass `--audio-root` through to `convert_manifest.py` (future enhanc
 
 ### 6. Launch training
 
+Pick the entry point that matches the decoder class from step 3:
+
+- `EncDecRNNTBPEModel` → `/opt/NeMo/examples/asr/asr_transducer/speech_to_text_rnnt_bpe.py`
+- `EncDecHybridRNNTCTCBPEModel` → `/opt/NeMo/examples/asr/asr_hybrid_transducer_ctc/speech_to_text_hybrid_rnnt_ctc_bpe.py`
+
 Inside the pod:
 
 ```bash
-RUN_ID="lora-smoke-$(date +%Y%m%d-%H%M)"
+RUN_ID="full-ft-$(date +%Y%m%d-%H%M)"
 mkdir -p /data/experiments/$RUN_ID
 cd /data/experiments/$RUN_ID
 
-nohup python /opt/NeMo/examples/asr/asr_adapters/train_asr_adapter.py \
-    model.restore_from_path=/models/nemo/nemotron-streaming/*.nemo \
+nohup python /opt/NeMo/examples/asr/asr_transducer/speech_to_text_rnnt_bpe.py \
+    --config-path=/opt/NeMo/examples/asr/conf/fastconformer/ \
+    --config-name=fast-conformer_transducer_bpe \
+    +init_from_nemo_model=/models/nemo/nemotron-streaming/*.nemo \
     model.train_ds.manifest_filepath=/data/manifests/qwen3tts_20260330_001.train.jsonl \
     model.validation_ds.manifest_filepath=/data/manifests/qwen3tts_20260330_001.val.jsonl \
-    model.train_ds.batch_size=8 \
-    model.validation_ds.batch_size=8 \
-    model.adapter.dim=32 \
-    model.optim.lr=3e-4 \
-    model.optim.sched.warmup_steps=100 \
+    model.train_ds.batch_size=16 \
+    model.validation_ds.batch_size=16 \
+    model.optim.lr=1e-4 \
+    model.optim.sched.warmup_steps=500 \
     trainer.devices=1 \
-    trainer.max_epochs=10 \
+    trainer.max_epochs=20 \
     trainer.precision=bf16-mixed \
     exp_manager.exp_dir=/data/experiments/$RUN_ID \
     exp_manager.create_checkpoint_callback=true \
@@ -196,6 +203,12 @@ echo "PID $! — logs at /data/experiments/$RUN_ID/train.log"
 ```
 
 `nohup ... &` detaches the training from your shell. You can `exit` the `oc rsh` and reconnect later.
+
+**Flag notes:**
+- `+init_from_nemo_model=` (not `model.restore_from_path=`) — loads weights but resets optimizer/scheduler. Critical for fine-tuning; `restore_from_path` would inherit the pretraining schedule's end state.
+- `model.optim.lr=1e-4` — gentle enough to avoid catastrophic forgetting on a small adaptation corpus.
+- `warmup_steps=500` — stabilizes the first phase of adaptation.
+- `bf16-mixed` — H100-friendly; keeps memory manageable on a single GPU.
 
 ### 7. Monitor progress
 
@@ -222,6 +235,8 @@ oc port-forward deployment/nemo-training 6006:6006
 # browse http://localhost:6006
 ```
 
+Watch `val_wer` in the training log. If it stops improving for 3+ validation rounds, early-stop (`trainer.max_epochs` or `trainer.val_check_interval` can drive this, or Ctrl+C the `nohup`'d process and pick up from `last.ckpt`).
+
 ### 8. Resume after interruption
 
 If the pod was scaled to 0 or crashed, checkpoints survive on `/data` (PVC-backed). Scale back up and resume:
@@ -231,8 +246,10 @@ oc scale deployment nemo-training --replicas=1
 oc rsh deployment/nemo-training
 
 # resume from the latest checkpoint
-python /opt/NeMo/examples/asr/asr_adapters/train_asr_adapter.py \
-    model.restore_from_path=/models/nemo/nemotron-streaming/*.nemo \
+python /opt/NeMo/examples/asr/asr_transducer/speech_to_text_rnnt_bpe.py \
+    --config-path=/opt/NeMo/examples/asr/conf/fastconformer/ \
+    --config-name=fast-conformer_transducer_bpe \
+    +init_from_nemo_model=/models/nemo/nemotron-streaming/*.nemo \
     model.train_ds.manifest_filepath=/data/manifests/qwen3tts_20260330_001.train.jsonl \
     model.validation_ds.manifest_filepath=/data/manifests/qwen3tts_20260330_001.val.jsonl \
     ... (same flags as launch) ... \
@@ -242,49 +259,39 @@ python /opt/NeMo/examples/asr/asr_adapters/train_asr_adapter.py \
 
 Lightning's `last.ckpt` is auto-saved every `check_val_every_n_epoch` step. Inspect the filename for the actual epoch/step: `epoch=03-step=2000.ckpt` etc.
 
-## Alternative: full-parameter fine-tuning
+## Alternative: LoRA adapter fine-tuning
 
-Use full fine-tuning when:
-- You have **>10k samples per accent** and catastrophic forgetting risk is manageable.
-- LoRA adapters have plateaued at non-acceptable WER.
-- There's a clear acoustic distribution shift (not just vocabulary/accent).
+LoRA fine-tuning adds a small ~1-5M-parameter adapter on top of Nemotron-Streaming's ~600M frozen weights. Consider it when:
 
-Exact entry point depends on decoder type (from step 3 above):
-- `EncDecRNNTBPEModel` → `/opt/NeMo/examples/asr/asr_transducer/speech_to_text_rnnt_bpe.py`
-- `EncDecHybridRNNTCTCBPEModel` → `/opt/NeMo/examples/asr/asr_hybrid_transducer_ctc/speech_to_text_hybrid_rnnt_ctc_bpe.py`
+- Iteration speed matters more than absolute WER (e.g., sweeping hyperparameters during early experimentation).
+- You explicitly want **per-accent adapters** for the Phase-2/3 routing experiments (one base model + many small swappable heads).
+- Catastrophic forgetting on out-of-domain English becomes a measurable problem with full-param.
 
-### Launch command
+Same prerequisites and steps 1-5 as above. The launch command (step 6) changes:
 
 ```bash
-RUN_ID="full-ft-$(date +%Y%m%d-%H%M)"
+RUN_ID="lora-$(date +%Y%m%d-%H%M)"
 mkdir -p /data/experiments/$RUN_ID
+cd /data/experiments/$RUN_ID
 
-nohup python /opt/NeMo/examples/asr/asr_transducer/speech_to_text_rnnt_bpe.py \
-    --config-path=/opt/NeMo/examples/asr/conf/fastconformer/ \
-    --config-name=fast-conformer_transducer_bpe \
-    +init_from_nemo_model=/models/nemo/nemotron-streaming/*.nemo \
+nohup python /opt/NeMo/examples/asr/asr_adapters/train_asr_adapter.py \
+    model.restore_from_path=/models/nemo/nemotron-streaming/*.nemo \
     model.train_ds.manifest_filepath=/data/manifests/qwen3tts_20260330_001.train.jsonl \
     model.validation_ds.manifest_filepath=/data/manifests/qwen3tts_20260330_001.val.jsonl \
-    model.train_ds.batch_size=16 \
-    model.optim.lr=1e-4 \
-    model.optim.sched.warmup_steps=500 \
+    model.train_ds.batch_size=8 \
+    model.validation_ds.batch_size=8 \
+    model.adapter.dim=32 \
+    model.optim.lr=3e-4 \
+    model.optim.sched.warmup_steps=100 \
     trainer.devices=1 \
-    trainer.max_epochs=20 \
+    trainer.max_epochs=10 \
     trainer.precision=bf16-mixed \
     exp_manager.exp_dir=/data/experiments/$RUN_ID \
     exp_manager.create_checkpoint_callback=true \
     > train.log 2>&1 &
 ```
 
-**Flag differences from LoRA:**
-- `+init_from_nemo_model=` (not `model.restore_from_path=`) — loads weights but resets optimizer/scheduler. Critical for fine-tuning; `restore_from_path` would inherit the pretraining schedule's end state.
-- Lower `model.optim.lr` (1e-4 vs 3e-4) — full-param needs gentler updates to avoid catastrophic forgetting.
-- Higher `warmup_steps` — stabilizes the first phase of adaptation.
-- `bf16-mixed` — H100-friendly; keeps memory manageable on a single GPU.
-
-### When it plateaus
-
-Watch `val_wer` in `train.log`. If it stops improving for 3+ validation rounds, early-stop (`trainer.max_epochs` or `trainer.val_check_interval` can drive this, or Ctrl+C the `nohup`'d process and pick up from `last.ckpt`).
+Monitoring, resume, and `nemo2riva` handoff are identical to the full-param flow.
 
 ## `nemo2riva` handoff
 
@@ -296,7 +303,7 @@ pip install nemo2riva    # not pre-installed; quick
 
 mkdir -p /models/riva
 nemo2riva \
-    --out /models/riva/nemotron-lora-v1.riva \
+    --out /models/riva/nemotron-fullft-v1.riva \
     /data/experiments/$RUN_ID/checkpoints/<best-or-final>.nemo
 
 ls -lh /models/riva/
@@ -320,10 +327,10 @@ Checkpoints on `/data/experiments/` persist across scale cycles.
 
 Everything here is provisionally correct but may need adjustment once someone actually runs it. If you hit any of these, please PR a fix + update this section.
 
-1. **NeMo script paths.** `/opt/NeMo/examples/asr/asr_adapters/train_asr_adapter.py` is the canonical location in NeMo 24.x. The 25.04 container may have moved it (possibly under `asr/` root, or renamed). If missing, `ls /opt/NeMo/examples/asr/` to discover the current layout.
+1. **NeMo script paths.** `/opt/NeMo/examples/asr/asr_transducer/speech_to_text_rnnt_bpe.py` and `/opt/NeMo/examples/asr/asr_adapters/train_asr_adapter.py` are the canonical locations in NeMo 24.x. The 25.04 container may have moved or renamed them. If missing, `ls /opt/NeMo/examples/asr/` to discover the current layout.
 2. **Nemotron-Streaming decoder type.** RNN-T vs Hybrid-RNN-T-CTC vs TDT variants each require a different full-param training script. The step-3 introspection is authoritative.
-3. **`model.restore_from_path` globbing.** `*.nemo` may not resolve inside NeMo's config loader (Hydra). Use the explicit filename if the glob fails.
-4. **Tokenizer.** Nemotron-Streaming ships its tokenizer bundled in the `.nemo` file. `model.restore_from_path` normally handles this; if training complains, try `model.tokenizer.update_tokenizer_model=false`.
+3. **`+init_from_nemo_model` globbing.** `*.nemo` may not resolve inside NeMo's config loader (Hydra). Use the explicit filename if the glob fails.
+4. **Tokenizer.** Nemotron-Streaming ships its tokenizer bundled in the `.nemo` file. `+init_from_nemo_model` normally handles this; if training complains, try `model.tokenizer.update_tokenizer_model=false`.
 5. **Sample rate 16 kHz assumption.** Based on FastConformer's typical preprocessor default. Confirm via the step-3 introspection of `m._cfg.preprocessor.sample_rate`. If it's 16 kHz, our resample is correct; if 24 kHz, skip resampling.
 6. **Audio-path rewrite after rsync.** Step 5's `sed` is a workaround; a proper fix is adding `--audio-root` to `convert_manifest.py` so paths are written cluster-ready from the start. Tracked as TODO.
 7. **`nemo2riva` output filename convention.** Nemotron-Streaming's Riva-side config may want a specific name; check the Riva model-config docs before assuming arbitrary filenames work.
